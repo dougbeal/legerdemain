@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
 	"os"
+	"os/user"
+	"path"
 
 	"github.com/abourget/ledger/parse"
 	"github.com/abourget/ledger/print"
 	"github.com/juju/gnuflag"
-	"path"
 )
 
 var (
@@ -21,37 +27,44 @@ var (
 const LedgerRCFileName string = ".ledgerrc"
 
 func main() {
-	parseLedger( parseLedgerRC )
+	parseLedger(parseLedgerRC(""))
 }
 
-func parseLedgerRC(string file) string {
+func parseLedgerRC(file string) string {
 	return "./foolscap.ledger"
 }
 
 func initFilePath() string {
-	if usr, err := os.user.Current(); err != nil {
-		rcInHome := path.join(usr.HomeDir, ledgerRCFileName)
-		if _, err := os.Stat(rcInHome); err != nil {
-			return rcInHome
+	home := func() (string, error) {
+		if usr, err := user.Current(); err != nil {
+			return "", err
+		} else {
+			return usr.HomeDir, err
 		}
 	}
-	rcInCurrentDirectory := path.join(os.Getwd(), ledgerRCFileName)
-	if _, err := os.Stat(rcInCurrentDirectory); err != nil {
-		return rcInCurrentDirectory
+	pathFunctions := []func() (string, error){home, os.Getwd}
+
+	for _, fn := range pathFunctions {
+		if directory, err := fn(); err != nil {
+			filePath := path.Join(directory, LedgerRCFileName)
+			if _, err := os.Stat(filePath); err != nil {
+				return directory
+			}
+		}
 	}
 	return ""
 }
 
-func parseLedger(string ledgerFile) {
+func parseLedger(ledgerFile string) {
 	if _, err := os.Stat(ledgerFile); os.IsNotExist(err) {
-		checkf(err, "ldgFile doesn't exist.  %s ", *ledgerFile)
+		log.Fatalln(err, "ldgFile doesn't exist.  %s ", ledgerFile)
 	}
-	cnt, err := ioutil.ReadFile(*ledgerFile)
+	cnt, err := ioutil.ReadFile(ledgerFile)
 	if err != nil {
 		log.Fatalln("Error reading input:", err)
 	}
 
-	tree := parse.New(*ledgerFile, string(cnt))
+	tree := parse.New(ledgerFile, string(cnt))
 	err = tree.Parse()
 	if err != nil {
 		log.Fatalln("Parsing error:", err)
@@ -70,7 +83,7 @@ func parseLedger(string ledgerFile) {
 		}
 	}
 	if *verbose {
-		printer := print.New(t)
+		printer := print.New(tree)
 
 		buf := &bytes.Buffer{}
 		err = printer.Print(buf)
@@ -80,14 +93,14 @@ func parseLedger(string ledgerFile) {
 
 		var dest io.Writer
 		dest = os.Stdout
-		if inFile != "" && *writeOutput {
-			destFile, err := os.Create(inFile)
-			if err != nil {
-				log.Fatalln("Couldn't write to file:", inFile)
-			}
-			dest = destFile
-			defer destFile.Close()
-		}
+		// if inFile != "" && *writeOutput {
+		// 	destFile, err := os.Create(inFile)
+		// 	if err != nil {
+		// 		log.Fatalln("Couldn't write to file:", inFile)
+		// 	}
+		// 	dest = destFile
+		// 	defer destFile.Close()
+		// }
 
 		_, err = dest.Write(buf.Bytes())
 		if err != nil {
