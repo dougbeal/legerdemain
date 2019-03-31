@@ -5,33 +5,84 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
+	"net/http"
+
 	"os"
 	"os/user"
 	"path"
 
+	"log"
+
 	"github.com/abourget/ledger/parse"
 	"github.com/abourget/ledger/print"
 	"github.com/juju/gnuflag"
+	"github.com/plaid/plaid-go/plaid"
+	"gopkg.in/yaml.v2"
 )
 
 var (
-	verbose  = gnuflag.Bool("verbose", false, "")
-	debug    = gnuflag.Bool("debug", false, "")
-	journal  = gnuflag.String("file", "", "Path of ledger file. (default: value from .ledgerrc.)")
-	ledgerrc = gnuflag.String("init-file", "", "Path of init file.  (default: search ~/.ledgerrc, ./.ledgerrc)")
-	output   = gnuflag.String("output", "/dev/stdout", "Path of output file.")
-	currency = gnuflag.String("currency", "USD", "Default currency if none set.")
+	verbose         = gnuflag.Bool("verbose", false, "")
+	debug           = gnuflag.Bool("debug", false, "")
+	journal         = gnuflag.String("file", "", "Path of ledger file. (default: value from .ledgerrc.)")
+	ledgerrc        = gnuflag.String("init-file", "", "Path of init file.  (default: search ~/.ledgerrc, ./.ledgerrc)")
+	output          = gnuflag.String("output", "/dev/stdout", "Path of output file.")
+	currency        = gnuflag.String("currency", "USD", "Default currency if none set.")
+	configDir       = gnuflag.String("config", "~/.legerdmain", "Path of legerdmain config")
+	plaidMode       = gnuflag.Bool("plaid", false, "Intake plaid data")
+	skipLedger      = gnuflag.Bool("skip", false, "Skip parsing existing ledger")
+	plaidConfigFile = gnuflag.String("plaidconf", "", "Set location of plain config file")
 )
+
+type PlaidConfig struct {
+	ClientID  string `json:"client_id"`
+	Secret    string `json:"secret"`
+	PublicKey string `json:"public_key"`
+}
 
 const LedgerRCFileName string = ".ledgerrc"
 
+func abortOnError(err error) {
+	log.Fatalln(err)
+}
+
 func main() {
-	parseLedger(parseLedgerRC(""))
+	gnuflag.Parse(true)
+
+	if *verbose {
+		log.Println(os.Args)
+		log.Print(gnuflag.Args())
+	}
+	if !*skipLedger {
+		parseLedger(parseLedgerRC(""))
+	}
+	if *plaidMode {
+		if *plaidConfigFile == "" {
+			*plaidConfigFile = path.Join(*configDir, "plaid.yaml")
+		}
+		data, err := ioutil.ReadFile(*plaidConfigFile)
+		abortOnError(err)
+
+		plaidConfig := &PlaidConfig{}
+		err = yaml.Unmarshal(data, plaidConfig)
+		abortOnError(err)
+
+		clientOptions := plaid.ClientOptions{
+			ClientID:    plaidConfig.ClientID,
+			Secret:      plaidConfig.Secret,
+			PublicKey:   plaidConfig.PublicKey,
+			Environment: plaid.Development,
+			HTTPClient:  &http.Client{},
+		}
+		_, err = plaid.NewClient(clientOptions)
+		abortOnError(err)
+
+	} else {
+	}
+
 }
 
 func parseLedgerRC(file string) string {
-	return "./foolscap.ledger"
+	return "/Users/dougbeal/git.private/finances/foolscap/foolscap.ledger"
 }
 
 func initFilePath() string {
@@ -94,12 +145,12 @@ func parseLedger(ledgerFile string) {
 		var dest io.Writer
 		dest = os.Stdout
 		// if inFile != "" && *writeOutput {
-		// 	destFile, err := os.Create(inFile)
-		// 	if err != nil {
-		// 		log.Fatalln("Couldn't write to file:", inFile)
-		// 	}
-		// 	dest = destFile
-		// 	defer destFile.Close()
+		//	destFile, err := os.Create(inFile)
+		//	if err != nil {
+		//		log.Fatalln("Couldn't write to file:", inFile)
+		//	}
+		//	dest = destFile
+		//	defer destFile.Close()
 		// }
 
 		_, err = dest.Write(buf.Bytes())
