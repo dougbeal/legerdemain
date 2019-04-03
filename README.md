@@ -1,4 +1,6 @@
 # legerdemain
+## secret storage
+- TODO: use https://github.com/zalando/go-keyring
 ## ingress
 ### plaid
 ### csv
@@ -9,3 +11,5 @@
 ### ofx
 ### ledger
 ## classification
+
+
