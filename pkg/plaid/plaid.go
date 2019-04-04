@@ -2,6 +2,9 @@ package plaid
 
 import (
 	"github.com/plaid/plaid-go/plaid"
+	"html/template"
+	"net/http"
+	"github.com/juju/loggo"
 )
 
 type PlaidEnvironment struct {
@@ -33,15 +36,19 @@ type Settings struct {
 	PlaidPublicKey   string
 }
 
+var log loggo.Logger
+
+func init() {
+	log = loggo.GetLogger("legerdemain/pkg/plaid")
+}
+
 func PlaidLink(settings Settings, client *plaid.Client) {
 	var accessToken string
 	t, err := template.ParseFiles("templates/index.html")
-	abortOnError(err)
+	log.Errorf("%s\n", err)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if *verbose {
-			log.Printf("http url: %+v\n", r.URL)
-			log.Printf("http rqst: %+v\n", r)
-		}
+		log.Infof("http url: %+v\n", r.URL)
+		log.Infof("http rqst: %+v\n", r)
 		t.Execute(w, settings)
 
 	})
@@ -50,21 +57,17 @@ func PlaidLink(settings Settings, client *plaid.Client) {
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	http.HandleFunc("/get_access_token", func(w http.ResponseWriter, r *http.Request) {
-		if *verbose {
-			log.Printf("http url: %+v\n", r.URL)
-			log.Printf("http rqst: %+v\n", r)
-		}
+		log.Infof("http url: %+v\n", r.URL)
+		log.Infof("http rqst: %+v\n", r)
+
 		if r.Method == "POST" {
 			r.ParseForm()
 
 			public_token := r.Form["public_token"]
 			accessTokenResponse, err := client.ExchangePublicToken(public_token[0])
-			log.Println("Public token -> Access Token", accessTokenResponse.AccessToken, "for item:", accessTokenResponse.ItemID)
+			log.Debugf("Public token -> Access Token", accessTokenResponse.AccessToken, "for item:", accessTokenResponse.ItemID)
 			accessToken = accessTokenResponse.AccessToken
-			if err != nil {
-				log.Print("abortOnError: ")
-				log.Println(err)
-			}
+			log.Errorf("%s\n", err)
 		}
 
 	})

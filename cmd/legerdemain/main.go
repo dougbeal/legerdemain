@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"html/template"
+
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -12,15 +12,18 @@ import (
 	"os/user"
 	"path"
 
-	"log"
+
 
 	rdebug "runtime/debug"
 
 	"github.com/abourget/ledger/parse"
 	"github.com/abourget/ledger/print"
 	"github.com/juju/gnuflag"
-	"github.com/plaid/plaid-go/plaid"
+
 	"gopkg.in/yaml.v2"
+	"github.com/dougbeal/legerdemain/pkg/plaid"
+
+	"log"
 )
 
 var (
@@ -36,30 +39,6 @@ var (
 	plaidConfigFile = gnuflag.String("plaidconf", "", "Set location of plain config file")
 )
 
-type PlaidEnvironment struct {
-	Name   string `yaml:"name"`
-	Secret string `yaml:"secret"`
-}
-
-type PlaidInstitution struct {
-	Name        string `yaml:"name"`
-	ItemId      string `yaml:"item_id"`
-	AccessToken string `yaml:"access_token"`
-}
-
-type User struct {
-	LedgerFileName string             `yaml:"ledger_file_name"`
-	Institutions   []PlaidInstitution `yaml:"institutions"`
-}
-
-type PlaidConfig struct {
-	ClientID     string             `yaml:"client_id"`
-	PublicKey    string             `yaml:"public_key"`
-	Environments []PlaidEnvironment `yaml:"environments"`
-	Users        []User             `yaml:"users"`
-}
-
-const LedgerRCFileName string = ".ledgerrc"
 
 func abortOnError(err error) {
 	if err != nil {
@@ -67,6 +46,9 @@ func abortOnError(err error) {
 		log.Fatalln(err)
 	}
 }
+const LedgerRCFileName string = ".ledgerrc"
+
+
 
 func main() {
 	defer func() {
@@ -94,7 +76,7 @@ func main() {
 		}
 		abortOnError(err)
 
-		plaidConfig := &PlaidConfig{}
+		plaidConfig := &plaid.PlaidConfig{}
 		err = yaml.Unmarshal(data, plaidConfig)
 		if *debug {
 			log.Print("Unmarshal'd plaid config file: ")
@@ -117,7 +99,7 @@ func main() {
 
 		if plaidError := err.(plaid.Error); plaidError.ErrorType == "ITEM_ERROR" && plaidError.ErrorCode == "ITEM_LOGIN_REQUIRED" {
 			// requires user interaction
-			PlaidLink(Settings{"transactions", plaidConfig.Environments[0].Name, plaidConfig.PublicKey}, client)
+			plaid.PlaidLink(Settings{"transactions", plaidConfig.Environments[0].Name, plaidConfig.PublicKey}, client)
 		}
 
 		abortOnError(err)
@@ -128,60 +110,7 @@ func main() {
 
 }
 
-type Settings struct {
-	PlaidProducts    string
-	PlaidEnvironment string
-	PlaidPublicKey   string
-}
 
-func PlaidLink(settings Settings, client *plaid.Client) {
-	var accessToken string
-	t, err := template.ParseFiles("templates/index.html")
-	abortOnError(err)
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if *verbose {
-			log.Printf("http url: %+v\n", r.URL)
-			log.Printf("http rqst: %+v\n", r)
-		}
-		t.Execute(w, settings)
-
-	})
-
-	fs := http.FileServer(http.Dir("static"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
-
-	http.HandleFunc("/get_access_token", func(w http.ResponseWriter, r *http.Request) {
-		if *verbose {
-			log.Printf("http url: %+v\n", r.URL)
-			log.Printf("http rqst: %+v\n", r)
-		}
-		if r.Method == "POST" {
-			r.ParseForm()
-
-			public_token := r.Form["public_token"]
-			accessTokenResponse, err := client.ExchangePublicToken(public_token[0])
-			log.Println("Public token -> Access Token", accessTokenResponse.AccessToken, "for item:", accessTokenResponse.ItemID)
-			accessToken = accessTokenResponse.AccessToken
-			if err != nil {
-				log.Print("abortOnError: ")
-				log.Println(err)
-			}
-		}
-
-	})
-
-	// http.HandleFunc("/auth", methods=["GET"])
-	// http.HandleFunc("/transactions", methods=["GET"])
-	// http.HandleFunc("/identity", methods=["GET"])
-	// http.HandleFunc("/balance", methods=["GET"])
-	// http.HandleFunc("/accounts", methods=["GET"])
-	// http.HandleFunc("/assets", methods=["GET"])
-	// http.HandleFunc("/item", methods=["GET"])
-	// http.HandleFunc("/set_access_token", methods=["POST"])
-
-	http.ListenAndServe(":8080", nil)
-
-}
 
 func parseLedgerRC(file string) string {
 	return "/Users/dougbeal/git.private/finances/foolscap/foolscap.ledger"
