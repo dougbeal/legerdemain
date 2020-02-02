@@ -6,13 +6,10 @@ import (
 
 	"io"
 	"io/ioutil"
-	"net/http"
 
 	"os"
 	"os/user"
 	"path"
-
-
 
 	rdebug "runtime/debug"
 
@@ -20,10 +17,14 @@ import (
 	"github.com/abourget/ledger/print"
 	"github.com/juju/gnuflag"
 
+	plaid "github.com/dougbeal/legerdemain/pkg/plaid"
+	plaidapi "github.com/plaid/plaid-go/plaid"
 	"gopkg.in/yaml.v2"
-	"github.com/dougbeal/legerdemain/pkg/plaid"
 
 	"log"
+
+	"github.com/pkg/browser"
+	"time"
 )
 
 var (
@@ -36,31 +37,32 @@ var (
 	configDir       = gnuflag.String("config", "~/.legerdmain", "Path of legerdmain config")
 	plaidMode       = gnuflag.Bool("plaid", false, "Intake plaid data")
 	skipLedger      = gnuflag.Bool("skip", false, "Skip parsing existing ledger")
-	plaidConfigFile = gnuflag.String("plaidconf", "", "Set location of plain config file")
+	plaidConfigFile = gnuflag.String("plaidconf", "", "Set location of plaid config file")
 )
-
 
 func abortOnError(err error) {
 	if err != nil {
 		log.Print("abortOnError: ")
-		log.Fatalln(err)
+		log.Println(err)
+		log.Fatalf("%s\n", rdebug.Stack())
 	}
 }
+
 const LedgerRCFileName string = ".ledgerrc"
 
-
-
 func main() {
+	var plaidConfig = &plaid.PlaidConfig{}
 	defer func() {
 		if r := recover(); r != nil {
-			log.Fatalf("stacktrace from panic: %s\n", rdebug.Stack())
+			log.Fatalf("stacktrace from panic (%s): %s\n", r, rdebug.Stack())
 		}
 	}()
 	gnuflag.Parse(true)
 
 	if *verbose {
 		log.Println(os.Args)
-		log.Print(gnuflag.Args())
+		gnuflag.Visit(func(f *gnuflag.Flag) { log.Print(f) })
+		log.Println(gnuflag.Args())
 	}
 	if !*skipLedger {
 		parseLedger(parseLedgerRC(""))
@@ -70,47 +72,64 @@ func main() {
 			*plaidConfigFile = path.Join(*configDir, "plaid.yaml")
 		}
 		data, err := ioutil.ReadFile(*plaidConfigFile)
+		abortOnError(err)
 		if *debug {
 			log.Print("Plaid config file: ")
 			log.Println(string(data))
 		}
-		abortOnError(err)
 
-		plaidConfig := &plaid.PlaidConfig{}
 		err = yaml.Unmarshal(data, plaidConfig)
 		if *debug {
-			log.Print("Unmarshal'd plaid config file: ")
+			log.Printf("Unmarshal'd plaid config file (%s): \n", *plaidConfigFile)
 			log.Printf("%+v\n:", plaidConfig)
 
 		}
 		abortOnError(err)
 
-		clientOptions := plaid.ClientOptions{
-			ClientID:    plaidConfig.ClientID,
-			Secret:      plaidConfig.Environments[0].Secret,
-			PublicKey:   plaidConfig.PublicKey,
-			Environment: plaid.Development, //   * development: Test your integration with live credentials; you will need to request access before you can access our Development environment
-			HTTPClient:  &http.Client{},
-		}
-		client, err := plaid.NewClient(clientOptions)
-		abortOnError(err)
-
-		accountsR, err := client.GetAccounts(plaidConfig.Users[0].Institutions[0].AccessToken)
-
-		if plaidError := err.(plaid.Error); plaidError.ErrorType == "ITEM_ERROR" && plaidError.ErrorCode == "ITEM_LOGIN_REQUIRED" {
-			// requires user interaction
-			plaid.PlaidLink(Settings{"transactions", plaidConfig.Environments[0].Name, plaidConfig.PublicKey}, client)
-		}
+		client, err := plaid.NewPlaid(*plaidConfig)
 
 		abortOnError(err)
-		log.Printf("%+v\n:", accountsR)
 
+		accountsResp, err := client.GetAccounts(plaidConfig.Users[0].Institutions[0].AccessToken)
+
+		if err != nil {
+			if plaidError, ok := err.(plaidapi.Error); ok && plaidError.ErrorType == "ITEM_ERROR" && plaidError.ErrorCode == "ITEM_LOGIN_REQUIRED" {
+				respChan := make(chan plaidapi.ExchangePublicTokenResponse)
+				errChan := make(chan error)
+				// requires user interaction
+				go client.PlaidLink(plaid.Settings{"transactions", plaidConfig.Environments[0].Name, plaidConfig.PublicKey}, respChan, errChan)
+				go browser.OpenURL("http://localhost:8080")
+				select {
+				case response := <-respChan:
+					log.Printf("Exchanged for access token: %s\n", response)
+				case err := <-errChan:
+					abortOnError(err)
+				}
+			}
+		}
+
+		log.Printf("accounts %+v\n:", accountsResp)
+		var accountIDs []string
+		for _, account := range accountsResp.Accounts {
+			accountIDs = append(accountIDs, account.AccountID)
+		}
+		options := plaidapi.GetTransactionsOptions{
+			AccountIDs: accountIDs,
+			StartDate: time.Now().AddDate(-10, 0, 0).Format("2006-02-01"), // must be YYYY-MM-DD
+			EndDate:   time.Now().Format("2006-02-01"),
+			Count:     500,
+			Offset:    0,
+		}
+		log.Printf("getting transactions %+v\n", options)
+		resp, err := client.GetTransactionsWithOptions(plaidConfig.Users[0].Institutions[0].AccessToken, options)
+		if plaidError, ok := err.(plaidapi.Error); ok {
+			abortOnError(plaidError)
+		}
+		log.Printf("transactions %+v\n:", resp)
 	} else {
 	}
 
 }
-
-
 
 func parseLedgerRC(file string) string {
 	return "/Users/dougbeal/git.private/finances/foolscap/foolscap.ledger"
@@ -170,7 +189,7 @@ func parseLedger(ledgerFile string) {
 		buf := &bytes.Buffer{}
 		err = printer.Print(buf)
 		if err != nil {
-			log.Fatalln("rendering ledger file:", err)
+			log.Fatalf("Fatal error: rendering ledger file:%s\n%s\n", err, rdebug.Stack())
 		}
 
 		var dest io.Writer
